@@ -99,4 +99,24 @@ if harfbuzz_opt == 'YES' or harfbuzz_opt == 'dynamic'
   )
 endif
 
+###
+
+svg_test_font = custom_target('svg-test-font',
+  output: 'svg-test.ttf',
+  command: [python_exe, files('issue-svg/make-font.py'), '@OUTPUT@'],
+  build_by_default: true,
+)
+
+test_svg = executable('svg',
+  files('issue-svg/main.c'),
+  dependencies: freetype_dep,
+)
+
+test('svg',
+  test_svg,
+  depends: svg_test_font,
+  args: [svg_test_font],
+  suite: 'regression',
+)
+
 # EOF

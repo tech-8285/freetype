@@ -398,7 +398,10 @@
       SVG_Service  svg_service;
 
 
-      module      = FT_Get_Module( slot->library, "ot-svg" );
+      module = FT_Get_Module( slot->library, "ot-svg" );
+      if ( !module || !module->clazz->module_interface )
+        return 1;
+
       svg_service = (SVG_Service)module->clazz->module_interface;
 
       return (FT_Bool)svg_service->preset_slot( module, slot, FALSE );
@@ -609,17 +612,28 @@
 #else
     if ( !( slot->face->face_flags & FT_FACE_FLAG_SVG ) )
       slot->other = NULL;
-    else
+    else if ( slot->other )
     {
-      if ( slot->internal->flags & FT_GLYPH_OWN_GZIP_SVG )
+      FT_SVG_Document  doc = (FT_SVG_Document)slot->other;
+
+
+      /* A decompressed GZIP document is owned by the slot; release it.  */
+      if ( slot->internal &&
+           ( slot->internal->flags & FT_GLYPH_OWN_GZIP_SVG ) )
       {
-        FT_Memory        memory = slot->face->memory;
-        FT_SVG_Document  doc    = (FT_SVG_Document)slot->other;
+        FT_Memory  memory = slot->face->memory;
 
 
         FT_FREE( doc->svg_document );
         slot->internal->flags &= ~FT_GLYPH_OWN_GZIP_SVG;
       }
+
+      /* The document object itself survives across load calls, but it  */
+      /* must not keep a reference to bytes that are no longer owned by */
+      /* the slot; also reset the remaining fields so that a stale       */
+      /* document can never be picked up by a later load.               */
+      doc->svg_document        = NULL;
+      doc->svg_document_length = 0;
     }
 #endif
 

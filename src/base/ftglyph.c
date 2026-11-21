@@ -306,21 +306,24 @@
 
     document = (FT_SVG_Document)slot->other;
 
-    if ( document->svg_document_length == 0 )
+    if ( document->svg_document == NULL ||
+         document->svg_document_length == 0 )
     {
       error = FT_THROW( Invalid_Slot_Handle );
       goto Exit;
     }
 
-    /* allocate a new document */
-    doc_length = document->svg_document_length;
-    if ( FT_QALLOC( glyph->svg_document, doc_length ) )
-      goto Exit;
-    glyph->svg_document_length = doc_length;
-
     glyph->glyph_index = slot->glyph_index;
 
-    glyph->metrics      = document->metrics;
+    /* Snapshot the metrics of the size that is current now: the document */
+    /* may have been loaded before the size changed, in which case its    */
+    /* metrics are stale.  A standalone glyph has no face afterwards, so  */
+    /* this is the only chance to record the size it is rendered at.      */
+    if ( slot->face && slot->face->size )
+      glyph->metrics = slot->face->size->metrics;
+    else
+      glyph->metrics = document->metrics;
+
     glyph->units_per_EM = document->units_per_EM;
 
     glyph->start_glyph_id = document->start_glyph_id;
@@ -329,8 +332,16 @@
     glyph->transform = document->transform;
     glyph->delta     = document->delta;
 
-    /* copy the document into glyph */
+    /* allocate a new document */
+    doc_length = document->svg_document_length;
+    if ( FT_QALLOC( glyph->svg_document, doc_length ) )
+      goto Exit;
+
+    /* copy the document into glyph; the glyph owns the copy, so */
+    /* the slot can be reused or destroyed without affecting it  */
     FT_MEM_COPY( glyph->svg_document, document->svg_document, doc_length );
+
+    glyph->svg_document_length = doc_length;
 
   Exit:
     return error;
@@ -346,6 +357,7 @@
 
     /* just free the memory */
     FT_FREE( glyph->svg_document );
+    glyph->svg_document_length = 0;
   }
 
 
@@ -366,15 +378,18 @@
       goto Exit;
     }
 
-    if ( source->svg_document_length == 0 )
+    if ( source->svg_document == NULL ||
+         source->svg_document_length == 0 )
     {
       error = FT_THROW( Invalid_Slot_Handle );
       goto Exit;
     }
 
-    target->glyph_index = source->glyph_index;
+    /* the target may already own a document (e.g. when replacing the  */
+    /* contents of an existing glyph); never leave it dangling         */
+    FT_FREE( target->svg_document );
 
-    target->svg_document_length = source->svg_document_length;
+    target->glyph_index = source->glyph_index;
 
     target->metrics      = source->metrics;
     target->units_per_EM = source->units_per_EM;
@@ -386,13 +401,18 @@
     target->delta     = source->delta;
 
     /* allocate space for the SVG document */
-    if ( FT_QALLOC( target->svg_document, target->svg_document_length ) )
+    if ( FT_QALLOC( target->svg_document, source->svg_document_length ) )
+    {
+      target->svg_document_length = 0;
       goto Exit;
+    }
 
     /* copy the document */
     FT_MEM_COPY( target->svg_document,
                  source->svg_document,
-                 target->svg_document_length );
+                 source->svg_document_length );
+
+    target->svg_document_length = source->svg_document_length;
 
   Exit:
     return error;
@@ -462,6 +482,9 @@
 
     FT_SVG_Document  document = NULL;
 
+
+    if ( glyph->svg_document == NULL || glyph->svg_document_length == 0 )
+      return FT_THROW( Invalid_Slot_Handle );
 
     if ( FT_NEW( document ) )
       return error;

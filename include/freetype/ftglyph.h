@@ -286,6 +286,11 @@ FT_BEGIN_HEADER
    *   Therefore, the transformation is stored along with the document.  In
    *   the absence of a 'ViewBox' or 'Width'/'Height' attribute, the size of
    *   the ViewPort should be assumed to be 'units_per_EM'.
+   *
+   *   An SVG glyph owns a private copy of its document, so destroying or
+   *   reusing the glyph slot it was extracted from does not affect it.
+   *   `metrics` describes the size that was active when the glyph was
+   *   created with @FT_Get_Glyph.
    */
   typedef struct  FT_SvgGlyphRec_
   {

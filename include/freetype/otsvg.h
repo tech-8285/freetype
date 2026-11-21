@@ -180,6 +180,11 @@ FT_BEGIN_HEADER
    *   matrices into the SVG coordinate system, as the original matrix is
    *   intended for the TTF/CFF coordinate system.
    *
+   *   The `metrics` and `units_per_EM` fields of the @FT_SVG_Document that
+   *   is reachable through `slot->other` always describe the size that is
+   *   current when the hook is called; this is also true when the hook is
+   *   called from FT_Glyph_To_Bitmap for a standalone @FT_Glyph.
+   *
    * @input:
    *   slot ::
    *     The glyph slot that has the SVG document loaded.

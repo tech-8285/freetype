@@ -49,6 +49,7 @@
 
     render->loaded    = FALSE;
     render->hooks_set = FALSE;
+    render->state     = NULL;
 
     return error;
   }
@@ -68,31 +69,87 @@
   }
 
 
+  /* Make sure that the SVG rendering hooks are set and initialized.   */
+  /* The init hook is called before any other hook and its state is    */
+  /* only published once it reported success, so no hook is ever       */
+  /* invoked with an invalid state.  A failing init hook is reported   */
+  /* to the caller instead of being ignored.                           */
   static FT_Error
-  ft_svg_preset_slot( FT_Module     module,
-                      FT_GlyphSlot  slot,
-                      FT_Bool       cache )
+  ft_svg_ensure_loaded( SVG_Renderer  svg_renderer )
   {
-    SVG_Renderer       svg_renderer = (SVG_Renderer)module;
-    SVG_RendererHooks  hooks        = svg_renderer->hooks;
+    FT_Error  error;
 
 
-    if ( svg_renderer->hooks_set == FALSE )
+    if ( svg_renderer->hooks_set == FALSE                     ||
+         svg_renderer->hooks.init_svg    == NULL              ||
+         svg_renderer->hooks.free_svg    == NULL              ||
+         svg_renderer->hooks.render_svg  == NULL              ||
+         svg_renderer->hooks.preset_slot == NULL              )
     {
       FT_TRACE1(( "Hooks are NOT set.  Can't render OT-SVG glyphs\n" ));
       return FT_THROW( Missing_SVG_Hooks );
     }
 
-    if ( svg_renderer->loaded == FALSE )
-    {
-      FT_TRACE3(( "ft_svg_preset_slot: first presetting call,"
-                  " calling init hook\n" ));
-      hooks.init_svg( &svg_renderer->state );
+    if ( svg_renderer->loaded == TRUE )
+      return FT_Err_Ok;
 
-      svg_renderer->loaded = TRUE;
+    FT_TRACE3(( "ft_svg_ensure_loaded: calling init hook\n" ));
+
+    svg_renderer->state = NULL;
+
+    error = svg_renderer->hooks.init_svg( &svg_renderer->state );
+    if ( error )
+    {
+      /* Discard whatever the init hook may have stored; the state must */
+      /* not be used by the other hooks afterwards.                    */
+      svg_renderer->state = NULL;
+      return error;
     }
 
-    return hooks.preset_slot( slot, cache, &svg_renderer->state );
+    svg_renderer->loaded = TRUE;
+
+    return FT_Err_Ok;
+  }
+
+
+  /* Refresh the size-dependent information of the SVG document attached */
+  /* to a glyph slot.  The document is created when the glyph is loaded, */
+  /* but the caller may change the size afterwards, before rendering;    */
+  /* the rendering hooks must then see the metrics of the current size. */
+  static void
+  ft_svg_update_document( FT_GlyphSlot  slot )
+  {
+    FT_SVG_Document  document = (FT_SVG_Document)slot->other;
+
+
+    if ( !document                               ||
+         slot->format != FT_GLYPH_FORMAT_SVG     ||
+         !slot->face                             ||
+         !slot->face->size                       )
+      return;
+
+    document->metrics = slot->face->size->metrics;
+  }
+
+
+  static FT_Error
+  ft_svg_preset_slot( FT_Module     module,
+                      FT_GlyphSlot  slot,
+                      FT_Bool       cache )
+  {
+    SVG_Renderer  svg_renderer = (SVG_Renderer)module;
+
+    FT_Error  error;
+
+
+    error = ft_svg_ensure_loaded( svg_renderer );
+    if ( error )
+      return error;
+
+    ft_svg_update_document( slot );
+
+    return svg_renderer->hooks.preset_slot( slot, cache,
+                                            &svg_renderer->state );
   }
 
 
@@ -104,34 +161,28 @@
   {
     SVG_Renderer  svg_renderer = (SVG_Renderer)renderer;
 
-    FT_Library  library = renderer->root.library;
-    FT_Memory   memory  = library->memory;
-    FT_Error    error;
-
-    SVG_RendererHooks  hooks = svg_renderer->hooks;
+    FT_Memory  memory = renderer->root.library->memory;
+    FT_Error   error;
 
 
-    FT_UNUSED( mode );
     FT_UNUSED( origin );
 
     if ( mode != FT_RENDER_MODE_NORMAL )
       return FT_THROW( Bad_Argument );
 
-    if ( svg_renderer->hooks_set == FALSE )
-    {
-      FT_TRACE1(( "Hooks are NOT set.  Can't render OT-SVG glyphs\n" ));
-      return FT_THROW( Missing_SVG_Hooks );
-    }
+    error = ft_svg_ensure_loaded( svg_renderer );
+    if ( error )
+      return error;
 
-    if ( svg_renderer->loaded == FALSE )
-    {
-      FT_TRACE3(( "ft_svg_render: first rendering, calling init hook\n" ));
-      error = hooks.init_svg( &svg_renderer->state );
+    /* Recompute the slot dimensions; abort before touching the bitmap */
+    /* if the preset hook fails.                                       */
+    error = ft_svg_preset_slot( (FT_Module)renderer, slot, TRUE );
+    if ( error )
+      return error;
 
-      svg_renderer->loaded = TRUE;
-    }
-
-    ft_svg_preset_slot( (FT_Module)renderer, slot, TRUE );
+    /* Release a bitmap that a previous rendering left in the slot so */
+    /* that it cannot be overwritten and leaked.                      */
+    ft_glyphslot_free_bitmap( slot );
 
     /* No `FT_QALLOC_MULT` here since we need a clean, empty canvas */
     /* to start with.                                               */
@@ -139,7 +190,10 @@
                         slot->bitmap.rows, slot->bitmap.pitch ) )
       return error;
 
-    error = hooks.render_svg( slot, &svg_renderer->state );
+    /* The buffer is ours until the render hook reports success; on */
+    /* failure it must be released here so that the slot does not   */
+    /* keep a dangling pointer to a freed allocation.               */
+    error = svg_renderer->hooks.render_svg( slot, &svg_renderer->state );
     if ( error )
       FT_FREE( slot->bitmap.buffer );
     else
@@ -178,7 +232,8 @@
 
       hooks = (SVG_RendererHooks*)value;
 
-      if ( !hooks->init_svg    ||
+      if ( !hooks ||
+           !hooks->init_svg    ||
            !hooks->free_svg    ||
            !hooks->render_svg  ||
            !hooks->preset_slot )
@@ -192,6 +247,14 @@
         goto Exit;
       }
 
+      /* If new hooks replace already initialized ones, release the */
+      /* state that belongs to the old hooks; otherwise the state of */
+      /* the new hooks is initialized lazily on the next use.       */
+      if ( renderer->loaded == TRUE )
+        renderer->hooks.free_svg( &renderer->state );
+
+      renderer->state     = NULL;
+      renderer->loaded    = FALSE;
       renderer->hooks     = *hooks;
       renderer->hooks_set = TRUE;
     }
@@ -274,6 +337,9 @@
 
 
     FT_UNUSED( renderer );
+
+    if ( !doc || slot->format != FT_GLYPH_FORMAT_SVG )
+      return FT_THROW( Invalid_Slot_Handle );
 
     if ( !matrix )
     {

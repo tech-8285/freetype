@@ -6,6 +6,14 @@ CHANGES BETWEEN 2.15.0 and 2.15.1 (YYYY-MMM-DD)
     has been removed since FreeType now supports ISO Open Font Format,
     Edition 5.
 
+  - OT-SVG glyph life cycle fixes.  A copied  `FT_Glyph' now owns its
+    document copy  independently of  the glyph slot  it came from,  so
+    reusing or destroying that slot no longer affects it.  The metrics
+    and the transformation  passed to  the SVG  rendering hooks  now
+    describe the  size that  is current when  the glyph is  rendered,
+    and a failing or missing hook reports an error instead of calling
+    into invalid function pointers.
+
 
 ======================================================================
 
