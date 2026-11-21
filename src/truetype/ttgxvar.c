@@ -3582,9 +3582,36 @@
     n = coords;
     for ( i = 0; i < num_coords; i++, n++, c++ )
     {
-      if ( *c != *n )
+      FT_Var_Axis*  a = mmvar->axis + i;
+
+      /* Clamp the user-supplied design coordinate to the axis range. */
+      /* `ft_var_to_normalized' maps out-of-range values to the end   */
+      /* points anyway; storing the clamped value keeps the design    */
+      /* coordinates reported back and the glyph metrics (which are  */
+      /* derived from the normalized coordinates) consistent.         */
+      FT_Fixed  value = *n;
+
+
+      if ( value < a->minimum )
       {
-        *c        = *n;
+        FT_TRACE1(( "TT_Set_Var_Design: design coordinate %.5f"
+                    " is below minimum %.5f; clamping\n",
+                    (double)value / 65536,
+                    (double)a->minimum / 65536 ));
+        value = a->minimum;
+      }
+      else if ( value > a->maximum )
+      {
+        FT_TRACE1(( "TT_Set_Var_Design: design coordinate %.5f"
+                    " is above maximum %.5f; clamping\n",
+                    (double)value / 65536,
+                    (double)a->maximum / 65536 ));
+        value = a->maximum;
+      }
+
+      if ( *c != value )
+      {
+        *c        = value;
         have_diff = 1;
       }
     }
@@ -3627,7 +3654,21 @@
     /* return value -1 indicates `no change';                      */
     /* we can exit early if `normalizedcoords' is already computed */
     if ( blend->normalizedcoords && !have_diff )
+    {
+      /* Even without a coordinate change the face can be in a     */
+      /* variable state: a partial input may leave an unspecified  */
+      /* axis at its named-instance value.  Report `is_variable'   */
+      /* based on all axes, not only the supplied coordinates, so   */
+      /* that the VARIATION flag stays consistent with the actual   */
+      /* instance the glyphs are rendered for.                      */
+      for ( i = 0; i < mmvar->num_axis; i++ )
+      {
+        if ( blend->normalizedcoords[i] )
+          return -2;  /* -2 means is_variable. */
+      }
+
       return -1;
+    }
 
     if ( FT_NEW_ARRAY( normalized, mmvar->num_axis ) )
       goto Exit;
@@ -3637,13 +3678,27 @@
 
     FT_TRACE5(( "TT_Set_Var_Design:\n" ));
     FT_TRACE5(( "  normalized design coordinates:\n" ));
-    ft_var_to_normalized( ttface, num_coords, blend->coords, normalized );
+
+    /* Normalize all axes, not only the `num_coords` user-supplied    */
+    /* ones: `blend->coords' has already been filled for the          */
+    /* remaining axes from the active named instance or the axis      */
+    /* defaults.  Passing only `num_coords' would leave their         */
+    /* normalized slots at zero, so that glyph outlines and advances  */
+    /* no longer matched the reported design coordinates.             */
+    ft_var_to_normalized( ttface,
+                          mmvar->num_axis,
+                          blend->coords,
+                          normalized );
 
     error = tt_set_mm_blend( ttface, mmvar->num_axis, normalized, 0 );
     if ( error )
       goto Exit;
 
-    for ( i = 0; i < num_coords; i++ )
+    /* Check all axes for the `is_variable' state: with partial      */
+    /* input, the remaining normalized coordinates were derived from  */
+    /* the active named instance (or axis defaults) and can be       */
+    /* non-zero even when the supplied coordinates are all zero.     */
+    for ( i = 0; i < mmvar->num_axis; i++ )
     {
       if ( normalized[i] )
       {
@@ -3790,6 +3845,19 @@
       error = FT_ERR( Invalid_Argument );
       goto Exit;
     }
+
+    /* Update the named-instance selection encoded in `face_index`     */
+    /* *before* touching the blend coordinates: `TT_Set_Var_Design`   */
+    /* fills unspecified axes from the named instance (or from the    */
+    /* axis defaults when no instance is selected) based on this      */
+    /* state.  Doing this afterwards would make a reset to the        */
+    /* default instance (`instance_index == 0`) inherit the previous  */
+    /* instance's coordinates and leave `doblend` switched on, so     */
+    /* that the reported axis values and the glyph metrics would      */
+    /* disagree.                                                       */
+    face->face_index =
+      ( (FT_Long)instance_index << 16 )        |
+      ( face->face_index & 0xFFFFL );
 
     if ( instance_index > 0 )
     {

@@ -46,6 +46,26 @@ test('outline-reverse',
 
 ###
 
+var_instance_font = custom_target('var-instance-font',
+  output: 'var-instance.ttf',
+  command: [python_exe, files('var-instance/make-fonts.py'), '@OUTPUT@'],
+  build_by_default: true,
+)
+
+test_var_instance = executable('var-instance',
+  files([ 'var-instance/main.c' ]),
+  dependencies: freetype_dep,
+)
+
+test('var-instance',
+  test_var_instance,
+  env: test_env,
+  depends: var_instance_font,
+  args: [var_instance_font],
+  suite: 'regression')
+
+###
+
 issue_1469_fonts = custom_target('issue-1469-fonts',
   output: [
     'issue-1469-32764.ttf',
