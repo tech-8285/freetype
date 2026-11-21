@@ -74,6 +74,32 @@ test('issue-1469',
 
 ###
 
+colr_v1_fonts = custom_target('colr-v1-fonts',
+  output: [
+    'colr-v1-valid.ttf',
+    'colr-v1-invalid.ttf',
+    'colr-v1-oob-layer.ttf',
+    'colr-v1-cycle.ttf',
+    'colr-v1-truncated.ttf',
+  ],
+  command: [python_exe, files('colr-v1/make-fonts.py'), '@OUTPUT@'],
+)
+
+test_colr_v1 = executable('colr-v1',
+  files('colr-v1/main.c'),
+  dependencies: freetype_dep,
+)
+
+test('colr-v1',
+  test_colr_v1,
+  depends: colr_v1_fonts,
+  args: [colr_v1_fonts[0], colr_v1_fonts[1], colr_v1_fonts[2],
+         colr_v1_fonts[3], colr_v1_fonts[4]],
+  suite: 'regression',
+)
+
+###
+
 if harfbuzz_opt == 'YES' or harfbuzz_opt == 'dynamic'
   issue_1441_c_args = []
   if harfbuzz_opt == 'dynamic'
